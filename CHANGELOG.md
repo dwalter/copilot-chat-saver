@@ -5,6 +5,15 @@ in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.1] — 2026-03-03
+
+### Fixed
+
+- Extension icon added (64×64 pixel art)
+- Excluded `.chat-history/` and `.vscode/` from VSIX package
+- Removed unused variable and duplicate code branch
+- Added Shiny Gen AI sponsorship credit
+
 ## [1.0.0] — 2026-03-03
 
 ### Added
