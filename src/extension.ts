@@ -105,7 +105,7 @@ class CopilotChatSaver {
 
         this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
         this.statusBar.text = '$(bookmark) Chat Saver';
-        this.statusBar.tooltip = 'Copilot Chat Saver — click to save all chats now';
+        this.statusBar.tooltip = 'Copilot Chat Saver — sponsored by Shiny Gen AI — click to save all chats now';
         this.statusBar.command = 'copilotChatSaver.saveAll';
         this.statusBar.show();
         context.subscriptions.push(this.statusBar);

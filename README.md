@@ -98,3 +98,14 @@ This extension:
 
 You can audit the entire source in a single file:
 [src/extension.ts](src/extension.ts)
+
+---
+
+## Sponsored by
+
+<a href="https://shinygen.ai">
+  <strong>Shiny Gen AI</strong>
+</a>
+
+Built with support from [Shiny Gen AI](https://shinygen.ai) — AI-powered tools
+for modern developers.

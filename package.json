@@ -10,6 +10,13 @@
     "type": "git",
     "url": "https://github.com/dwalter/copilot-chat-saver"
   },
+  "sponsor": {
+    "url": "https://shinygen.ai"
+  },
+  "funding": {
+    "type": "other",
+    "url": "https://shinygen.ai"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
