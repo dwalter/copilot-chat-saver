@@ -1,0 +1,82 @@
+{
+  "name": "copilot-chat-saver",
+  "displayName": "Copilot Chat Saver",
+  "description": "Automatically saves all GitHub Copilot chat sessions (including Claude thinking/reasoning) as Markdown files in your workspace. 100% local, no telemetry, no network.",
+  "version": "1.0.0",
+  "publisher": "dwalter",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dwalter/copilot-chat-saver"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotChatSaver.saveAll",
+        "title": "Copilot Chat Saver: Save All Chats Now"
+      },
+      {
+        "command": "copilotChatSaver.toggleAutoSave",
+        "title": "Copilot Chat Saver: Toggle Auto-Save"
+      },
+      {
+        "command": "copilotChatSaver.openHistory",
+        "title": "Copilot Chat Saver: Open History Folder"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Chat Saver",
+      "properties": {
+        "copilotChatSaver.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save chat sessions when changes are detected."
+        },
+        "copilotChatSaver.outputDirectory": {
+          "type": "string",
+          "default": ".chat-history",
+          "description": "Directory (relative to workspace root) where chat sessions are saved."
+        },
+        "copilotChatSaver.pollIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 3600,
+          "description": "How often to check for new/updated chat sessions (seconds)."
+        },
+        "copilotChatSaver.includeThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include Claude thinking/reasoning blocks in saved chats."
+        },
+        "copilotChatSaver.includeToolCalls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include tool call details (file reads, searches, edits) in saved chats."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.5.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
