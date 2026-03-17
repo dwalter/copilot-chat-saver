@@ -1,7 +1,7 @@
 {
   "name": "copilot-chat-saver",
   "displayName": "Copilot Chat Saver",
-  "description": "Automatically saves all GitHub Copilot chat sessions (including Claude thinking/reasoning) as Markdown files in your workspace. 100% local, no telemetry, no network.",
+  "description": "Automatically saves all GitHub Copilot and Claude Code chat sessions (including thinking/reasoning) as Markdown files in your workspace. 100% local, no telemetry, no network.",
   "version": "1.0.1",
   "publisher": "dwalter",
   "license": "MIT",

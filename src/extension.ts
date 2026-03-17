@@ -1,17 +1,21 @@
 /**
  * Copilot Chat Saver — VS Code Extension
  *
- * Automatically saves all GitHub Copilot chat sessions (including Claude
- * thinking/reasoning blocks) as Markdown files in your workspace.
+ * Automatically saves all GitHub Copilot and Claude Code chat sessions
+ * (including thinking/reasoning blocks) as Markdown files in your workspace.
  *
  * 100% local. No telemetry. No network. No dependencies beyond Node.js stdlib.
  *
  * Storage formats handled:
- *   - .json  (older VS Code chat sessions)
- *   - .jsonl (newer incremental VS Code chat sessions, kind=0/1/2)
+ *   - .json  (older VS Code Copilot chat sessions)
+ *   - .jsonl (newer incremental VS Code Copilot chat sessions, kind=0/1/2)
+ *   - .jsonl (Claude Code conversations in ~/.claude/projects/)
  *
- * Chat sessions live in:
+ * Copilot chat sessions live in:
  *   ~/Library/Application Support/Code/User/workspaceStorage/<hash>/chatSessions/
+ *
+ * Claude Code conversations live in:
+ *   ~/.claude/projects/<project-path-with-dashes>/<session-uuid>.jsonl
  */
 
 import * as vscode from 'vscode';
@@ -68,6 +72,57 @@ interface ChatSession {
         };
         mode?: { id?: string; kind?: string };
     };
+}
+
+// ─── Claude Code Types ──────────────────────────────────────────────────────
+
+interface ClaudeCodeMessage {
+    type: 'user' | 'assistant' | 'queue-operation' | 'file-history-snapshot';
+    parentUuid?: string | null;
+    uuid?: string;
+    timestamp?: string;
+    sessionId?: string;
+    isMeta?: boolean;
+    isSidechain?: boolean;
+    cwd?: string;
+    version?: string;
+    gitBranch?: string;
+    toolUseResult?: string;
+    message?: {
+        role?: string;
+        model?: string;
+        content?: string | ClaudeCodeContentBlock[];
+    };
+}
+
+interface ClaudeCodeContentBlock {
+    type: string;
+    text?: string;
+    thinking?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+    id?: string;
+    content?: string;
+    is_error?: boolean;
+    tool_use_id?: string;
+}
+
+interface ClaudeCodeSession {
+    sessionId: string;
+    timestamp: string;
+    model: string;
+    version: string;
+    cwd: string;
+    gitBranch: string;
+    turns: ClaudeCodeTurn[];
+}
+
+interface ClaudeCodeTurn {
+    userText: string;
+    timestamp: string;
+    assistantParts: ClaudeCodeContentBlock[];
+    model: string;
+    toolResults: Map<string, { content: string; isError: boolean }>;
 }
 
 // ─── Extension Entry Points ──────────────────────────────────────────────────
@@ -196,16 +251,6 @@ class CopilotChatSaver {
     // ── Core save logic ──────────────────────────────────────────────────────
 
     async saveAllChats(showMessage: boolean) {
-        const chatDir = this.findChatSessionsDir();
-        if (!chatDir) {
-            if (showMessage) {
-                vscode.window.showWarningMessage(
-                    'Could not find VS Code chat sessions directory for this workspace.'
-                );
-            }
-            return;
-        }
-
         const outDir = this.getOutputDir();
         if (!outDir) {
             if (showMessage) {
@@ -214,50 +259,59 @@ class CopilotChatSaver {
             return;
         }
 
-        let files: string[];
-        try {
-            files = fs.readdirSync(chatDir).filter(f => f.endsWith('.json') || f.endsWith('.jsonl'));
-        } catch {
-            this.info(`Cannot read chat sessions dir: ${chatDir}`);
-            return;
-        }
-
         let saved = 0;
         let errors = 0;
 
-        for (const file of files) {
+        // ── Save Copilot chats ──
+        const chatDir = this.findChatSessionsDir();
+        if (chatDir) {
+            let files: string[];
             try {
-                const filePath = path.join(chatDir, file);
-                const session = file.endsWith('.jsonl')
-                    ? this.parseJsonlSession(filePath)
-                    : this.parseJsonSession(filePath);
+                files = fs.readdirSync(chatDir).filter(f => f.endsWith('.json') || f.endsWith('.jsonl'));
+            } catch {
+                this.info(`Cannot read chat sessions dir: ${chatDir}`);
+                files = [];
+            }
 
-                if (!session || !session.requests?.length) {
-                    continue;
+            for (const file of files) {
+                try {
+                    const filePath = path.join(chatDir, file);
+                    const session = file.endsWith('.jsonl')
+                        ? this.parseJsonlSession(filePath)
+                        : this.parseJsonSession(filePath);
+
+                    if (!session || !session.requests?.length) {
+                        continue;
+                    }
+
+                    const md = this.formatSessionAsMarkdown(session);
+                    const hash = crypto.createHash('md5').update(md).digest('hex').slice(0, 12);
+                    const sessionId = session.sessionId || path.basename(file, path.extname(file));
+
+                    if (this.knownHashes.get(sessionId) === hash) {
+                        continue; // no change
+                    }
+
+                    // Write file
+                    fs.mkdirSync(outDir, { recursive: true });
+                    const outName = this.makeFilename(session, sessionId);
+                    const outPath = path.join(outDir, outName);
+                    fs.writeFileSync(outPath, md, 'utf-8');
+
+                    this.knownHashes.set(sessionId, hash);
+                    saved++;
+                    this.info(`Saved: ${outName}`);
+                } catch (err) {
+                    errors++;
+                    this.info(`Error processing ${file}: ${err}`);
                 }
-
-                const md = this.formatSessionAsMarkdown(session);
-                const hash = crypto.createHash('md5').update(md).digest('hex').slice(0, 12);
-                const sessionId = session.sessionId || path.basename(file, path.extname(file));
-
-                if (this.knownHashes.get(sessionId) === hash) {
-                    continue; // no change
-                }
-
-                // Write file
-                fs.mkdirSync(outDir, { recursive: true });
-                const outName = this.makeFilename(session, sessionId);
-                const outPath = path.join(outDir, outName);
-                fs.writeFileSync(outPath, md, 'utf-8');
-
-                this.knownHashes.set(sessionId, hash);
-                saved++;
-                this.info(`Saved: ${outName}`);
-            } catch (err) {
-                errors++;
-                this.info(`Error processing ${file}: ${err}`);
             }
         }
+
+        // ── Save Claude Code chats ──
+        const claudeResult = this.saveClaudeCodeChats(outDir);
+        saved += claudeResult.saved;
+        errors += claudeResult.errors;
 
         // Persist hashes
         await this.context.workspaceState.update(
@@ -268,10 +322,14 @@ class CopilotChatSaver {
         if (showMessage) {
             if (saved > 0) {
                 vscode.window.showInformationMessage(
-                    `Copilot Chat Saver: Saved ${saved} chat(s) to ${this.getConfig().outputDirectory}/`
+                    `Chat Saver: Saved ${saved} chat(s) to ${this.getConfig().outputDirectory}/`
+                );
+            } else if (!chatDir && !this.findClaudeCodeSessionsDir()) {
+                vscode.window.showWarningMessage(
+                    'Could not find any chat sessions (Copilot or Claude Code) for this workspace.'
                 );
             } else {
-                vscode.window.showInformationMessage('Copilot Chat Saver: All chats already up to date.');
+                vscode.window.showInformationMessage('Chat Saver: All chats already up to date.');
             }
         }
 
@@ -646,6 +704,295 @@ class CopilotChatSaver {
         }
 
         return null;
+    }
+
+    // ── Claude Code: find sessions directory ───────────────────────────────
+
+    private findClaudeCodeSessionsDir(): string | null {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) { return null; }
+
+        // Claude Code stores projects at ~/.claude/projects/<path-with-dashes>/
+        // e.g. /Users/foo/my-project → -Users-foo-my-project
+        const projectPath = workspaceFolder.uri.fsPath;
+        const encodedPath = projectPath.replace(/\//g, '-');
+        const claudeDir = path.join(os.homedir(), '.claude', 'projects', encodedPath);
+
+        if (fs.existsSync(claudeDir)) {
+            return claudeDir;
+        }
+        return null;
+    }
+
+    // ── Claude Code: parse session ──────────────────────────────────────────
+
+    private parseClaudeCodeSession(filePath: string): ClaudeCodeSession | null {
+        try {
+            const raw = fs.readFileSync(filePath, 'utf-8');
+            const lines = raw.split('\n').filter(l => l.trim());
+            if (lines.length === 0) { return null; }
+
+            const messages: ClaudeCodeMessage[] = [];
+            for (const line of lines) {
+                try {
+                    messages.push(JSON.parse(line));
+                } catch {
+                    // skip malformed lines
+                }
+            }
+
+            if (messages.length === 0) { return null; }
+
+            // Extract session metadata from the first real message
+            const firstMsg = messages.find(m => m.type === 'user' || m.type === 'assistant');
+            const sessionId = firstMsg?.sessionId || path.basename(filePath, '.jsonl');
+            const version = (firstMsg as any)?.version || '';
+            const cwd = (firstMsg as any)?.cwd || '';
+            const gitBranch = (firstMsg as any)?.gitBranch || '';
+
+            // Build turns by grouping user messages → assistant responses
+            const turns: ClaudeCodeTurn[] = [];
+            let currentTurn: ClaudeCodeTurn | null = null;
+
+            // Collect tool results from user messages (keyed by tool_use_id)
+            const toolResults = new Map<string, { content: string; isError: boolean }>();
+
+            for (const msg of messages) {
+                if (msg.type === 'queue-operation' || msg.type === 'file-history-snapshot') {
+                    continue;
+                }
+
+                // Collect tool results from user messages
+                if (msg.type === 'user' && msg.message?.content && Array.isArray(msg.message.content)) {
+                    for (const block of msg.message.content) {
+                        if (block.type === 'tool_result' && block.tool_use_id) {
+                            toolResults.set(block.tool_use_id, {
+                                content: typeof block.content === 'string' ? block.content : '',
+                                isError: block.is_error || false,
+                            });
+                        }
+                    }
+                }
+
+                if (msg.type === 'user' && !msg.isMeta && !msg.toolUseResult) {
+                    const content = msg.message?.content;
+                    let text = '';
+                    if (typeof content === 'string') {
+                        // Skip system/command messages
+                        if (content.includes('<local-command-') || content.includes('<command-name>')) {
+                            continue;
+                        }
+                        text = content;
+                    } else if (Array.isArray(content)) {
+                        const textParts = content
+                            .filter(b => b.type === 'text' && b.text)
+                            .map(b => b.text!);
+                        if (textParts.length === 0) { continue; }
+                        text = textParts.join('\n\n');
+                    }
+
+                    if (!text.trim()) { continue; }
+
+                    // Start a new turn
+                    if (currentTurn) {
+                        currentTurn.toolResults = new Map(toolResults);
+                        turns.push(currentTurn);
+                    }
+                    currentTurn = {
+                        userText: text.trim(),
+                        timestamp: msg.timestamp || '',
+                        assistantParts: [],
+                        model: '',
+                        toolResults: new Map(),
+                    };
+                } else if (msg.type === 'assistant' && currentTurn) {
+                    const msgContent = msg.message;
+                    if (!msgContent?.content) { continue; }
+
+                    if (!currentTurn.model && msgContent.model) {
+                        currentTurn.model = msgContent.model;
+                    }
+
+                    const content = msgContent.content;
+                    if (Array.isArray(content)) {
+                        for (const block of content) {
+                            currentTurn.assistantParts.push(block);
+                        }
+                    }
+                }
+            }
+
+            if (currentTurn) {
+                currentTurn.toolResults = new Map(toolResults);
+                turns.push(currentTurn);
+            }
+
+            if (turns.length === 0) { return null; }
+
+            const model = turns[0]?.model || 'Claude';
+            const timestamp = messages.find(m => m.timestamp)?.timestamp || '';
+
+            return { sessionId, timestamp, model, version, cwd, gitBranch, turns };
+        } catch {
+            return null;
+        }
+    }
+
+    // ── Claude Code: format as Markdown ─────────────────────────────────────
+
+    private formatClaudeCodeSessionAsMarkdown(session: ClaudeCodeSession): string {
+        const cfg = this.getConfig();
+
+        // Derive title from first user message
+        const firstMsg = session.turns[0]?.userText || 'Untitled';
+        const title = firstMsg.length > 80 ? firstMsg.slice(0, 80) + '…' : firstMsg;
+
+        const createdAt = session.timestamp
+            ? new Date(session.timestamp).toISOString().replace('T', ' ').slice(0, 19)
+            : 'Unknown';
+
+        const lastTurn = session.turns[session.turns.length - 1];
+        const lastMsg = lastTurn?.timestamp
+            ? new Date(lastTurn.timestamp).toISOString().replace('T', ' ').slice(0, 19)
+            : createdAt;
+
+        let md = `# ${title}\n\n`;
+        md += `| | |\n|---|---|\n`;
+        md += `| **Source** | Claude Code |\n`;
+        md += `| **Created** | ${createdAt} |\n`;
+        md += `| **Last Message** | ${lastMsg} |\n`;
+        md += `| **Model** | ${session.model} |\n`;
+        if (session.version) { md += `| **Version** | ${session.version} |\n`; }
+        if (session.gitBranch) { md += `| **Branch** | ${session.gitBranch} |\n`; }
+        md += `| **Session ID** | \`${session.sessionId}\` |\n\n`;
+        md += `---\n\n`;
+
+        for (const turn of session.turns) {
+            // ── User message ──
+            md += `## User\n\n`;
+            if (turn.timestamp) {
+                const ts = new Date(turn.timestamp).toISOString().replace('T', ' ').slice(0, 19);
+                md += `*${ts}*\n\n`;
+            }
+            md += `${turn.userText}\n\n`;
+
+            // ── Assistant response ──
+            md += `## Assistant`;
+            if (turn.model && turn.model !== session.model) {
+                md += ` (${turn.model})`;
+            }
+            md += `\n\n`;
+
+            let currentText = '';
+            for (const block of turn.assistantParts) {
+                if (block.type === 'thinking') {
+                    if (!cfg.includeThinking) { continue; }
+                    if (currentText.trim()) {
+                        md += currentText.trim() + '\n\n';
+                        currentText = '';
+                    }
+                    const thinkingText = block.thinking || '';
+                    if (thinkingText.trim()) {
+                        md += `<details>\n<summary>💭 Thinking</summary>\n\n${thinkingText.trim()}\n\n</details>\n\n`;
+                    }
+                } else if (block.type === 'tool_use') {
+                    if (!cfg.includeToolCalls) { continue; }
+                    if (currentText.trim()) {
+                        md += currentText.trim() + '\n\n';
+                        currentText = '';
+                    }
+                    const toolName = block.name || 'Tool';
+                    const input = block.input || {};
+                    let summary = `**🔧 ${toolName}**`;
+
+                    // Add concise input summary
+                    if (toolName === 'Read' && input.file_path) {
+                        summary += `: \`${path.basename(input.file_path as string)}\``;
+                    } else if (toolName === 'Write' && input.file_path) {
+                        summary += `: \`${path.basename(input.file_path as string)}\``;
+                    } else if (toolName === 'Edit' && input.file_path) {
+                        summary += `: \`${path.basename(input.file_path as string)}\``;
+                    } else if (toolName === 'Bash' && input.command) {
+                        const cmd = String(input.command);
+                        summary += `: \`${cmd.length > 80 ? cmd.slice(0, 80) + '…' : cmd}\``;
+                    } else if (toolName === 'Grep' && input.pattern) {
+                        summary += `: \`${input.pattern}\``;
+                    } else if (toolName === 'Glob' && input.pattern) {
+                        summary += `: \`${input.pattern}\``;
+                    } else if (toolName === 'Agent') {
+                        summary += `: ${(input.description as string) || 'subagent'}`;
+                    }
+
+                    md += `> ${summary}\n\n`;
+                } else if (block.type === 'text') {
+                    currentText += block.text || '';
+                }
+            }
+
+            if (currentText.trim()) {
+                md += currentText.trim() + '\n\n';
+            }
+
+            md += `---\n\n`;
+        }
+
+        return md;
+    }
+
+    // ── Claude Code: save sessions ──────────────────────────────────────────
+
+    private saveClaudeCodeChats(outDir: string): { saved: number; errors: number } {
+        const claudeDir = this.findClaudeCodeSessionsDir();
+        if (!claudeDir) { return { saved: 0, errors: 0 }; }
+
+        let files: string[];
+        try {
+            files = fs.readdirSync(claudeDir).filter(f => f.endsWith('.jsonl'));
+        } catch {
+            return { saved: 0, errors: 0 };
+        }
+
+        let saved = 0;
+        let errors = 0;
+
+        for (const file of files) {
+            try {
+                const filePath = path.join(claudeDir, file);
+                const session = this.parseClaudeCodeSession(filePath);
+                if (!session || session.turns.length === 0) { continue; }
+
+                const md = this.formatClaudeCodeSessionAsMarkdown(session);
+                const hash = crypto.createHash('md5').update(md).digest('hex').slice(0, 12);
+                const key = `claude-code-${session.sessionId}`;
+
+                if (this.knownHashes.get(key) === hash) { continue; }
+
+                fs.mkdirSync(outDir, { recursive: true });
+
+                // Build filename
+                const date = session.timestamp
+                    ? new Date(session.timestamp).toISOString().slice(0, 10)
+                    : 'undated';
+                const titleSlug = (session.turns[0]?.userText || 'untitled')
+                    .replace(/[^a-zA-Z0-9 _-]/g, '')
+                    .replace(/\s+/g, '-')
+                    .toLowerCase()
+                    .slice(0, 60);
+                const idPrefix = session.sessionId.slice(0, 8);
+                const outName = `${date}_claude-code_${titleSlug}_${idPrefix}.md`;
+                const outPath = path.join(outDir, outName);
+
+                fs.writeFileSync(outPath, md, 'utf-8');
+                this.knownHashes.set(key, hash);
+                saved++;
+                this.info(`Saved Claude Code: ${outName}`);
+            } catch (err) {
+                errors++;
+                this.info(`Error processing Claude Code ${file}: ${err}`);
+            }
+        }
+
+        return { saved, errors };
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
