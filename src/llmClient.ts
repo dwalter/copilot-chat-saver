@@ -54,15 +54,8 @@ export async function summarize(
 }
 
 function parseStructuredResponse(rawText: string): LLMResult {
-    const clean = rawText
-        .replace(/^```json\s*/i, '')
-        .replace(/```\s*$/i, '')
-        .trim();
-
-    let parsed: unknown;
-    try {
-        parsed = JSON.parse(clean);
-    } catch {
+    const parsed = parseJsonObject(rawText);
+    if (parsed === undefined) {
         throw new Error('LLM response was not valid JSON. Try again or adjust your prompt.');
     }
 
@@ -84,6 +77,96 @@ function parseStructuredResponse(rawText: string): LLMResult {
         filename,
         summary: result.summary,
     };
+}
+
+function parseJsonObject(rawText: string): unknown {
+    const candidates = [
+        rawText.trim(),
+        stripMarkdownFence(rawText),
+    ];
+
+    for (const candidate of candidates) {
+        if (!candidate) {
+            continue;
+        }
+
+        try {
+            return JSON.parse(candidate);
+        } catch {
+            // Fall through to object extraction.
+        }
+    }
+
+    const extracted = extractFirstJsonObject(stripMarkdownFence(rawText) ?? rawText);
+    if (!extracted) {
+        return undefined;
+    }
+
+    try {
+        return JSON.parse(extracted);
+    } catch {
+        return undefined;
+    }
+}
+
+function stripMarkdownFence(rawText: string): string | undefined {
+    const match = rawText.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return match?.[1]?.trim();
+}
+
+function extractFirstJsonObject(rawText: string): string | undefined {
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let isEscaped = false;
+
+    for (let index = 0; index < rawText.length; index += 1) {
+        const char = rawText[index];
+
+        if (inString) {
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                isEscaped = true;
+                continue;
+            }
+
+            if (char === '"') {
+                inString = false;
+            }
+
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+
+        if (char === '{') {
+            if (depth === 0) {
+                start = index;
+            }
+            depth += 1;
+            continue;
+        }
+
+        if (char === '}') {
+            if (depth === 0) {
+                continue;
+            }
+
+            depth -= 1;
+            if (depth === 0 && start >= 0) {
+                return rawText.slice(start, index + 1);
+            }
+        }
+    }
+
+    return undefined;
 }
 
 function sanitizeFilename(value: string): string {
