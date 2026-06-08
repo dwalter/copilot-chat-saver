@@ -6,7 +6,7 @@ export interface PromptContext {
     firstMessage: string;
     workspaceName: string;
     model: string;
-    linearIssueId: string;
+    ticketId: string;
 }
 
 export function renderPrompt(template: string, context: PromptContext): string {

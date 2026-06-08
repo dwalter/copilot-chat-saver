@@ -46,7 +46,7 @@ async function saveConversation(): Promise<void> {
         value: detectedLinearIssueId ?? '',
         ignoreFocusOut: true,
     });
-    const linearIssueId = (linearIssueInput ?? '').trim();
+    const ticketId = (linearIssueInput ?? '').trim();
 
     const firstMessage = session.turns.find((turn) => turn.role === 'user')?.content ?? '';
     const promptContext: PromptContext = {
@@ -57,7 +57,7 @@ async function saveConversation(): Promise<void> {
         firstMessage: firstMessage.slice(0, 100),
         workspaceName: path.basename(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? ''),
         model,
-        linearIssueId,
+        ticketId,
     };
 
     const renderedPrompt = renderPrompt(promptTemplate, promptContext);
@@ -77,7 +77,7 @@ async function saveConversation(): Promise<void> {
             result.filename,
             result.summary,
             session,
-            linearIssueId,
+            ticketId,
             includeFullTranscript
         );
 
